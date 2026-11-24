@@ -1059,19 +1059,30 @@ async function offlineView(){
  const search=document.createElement('input');search.className='search';search.placeholder='Pesquisar sinais';app.append(search);
  const grid=document.createElement('div');grid.className='grid';app.append(grid);
  let drawGeneration=0,urls=[];
+ const expiryTimer=setTimeout(()=>{if(generation===offlineGeneration&&!navigator.onLine){++offlineGeneration;release();closeRestrictedContent();app.textContent='Autorização offline expirada. Reconecte para renovar.';}},Math.max(0,grant.until-Date.now()));
+ window.addEventListener('online',()=>clearTimeout(expiryTimer),{once:true});
  const release=()=>{urls.forEach(u=>URL.revokeObjectURL(u));urls=[];};
  async function draw(){
  const seq=++drawGeneration;release();grid.replaceChildren();
  const q=search.value.toLocaleLowerCase().trim();
  for(const sign of signs.filter(s=>[s.word,s.caption,s.tags,s.category].join(' ').toLocaleLowerCase().includes(q))){
- if(seq!==drawGeneration||generation!==offlineGeneration||navigator.onLine)return;
+ if(seq!==drawGeneration||generation!==offlineGeneration||navigator.onLine||Date.now()>=grant.until)return;
  let media;try{media=await decryptCachedMedia(await cacheGet(sign.gif));}catch(e){continue;}
  if(!media||seq!==drawGeneration||generation!==offlineGeneration||navigator.onLine)continue;
  const url=URL.createObjectURL(media);urls.push(url);
  const card=document.createElement('div');card.className='card';
  const el=document.createElement(media.type.startsWith('video/')?'video':'img');el.src=url;el.style.cssText='width:100%;aspect-ratio:4/3;object-fit:contain';
  if(el.tagName==='VIDEO'){el.muted=true;el.loop=true;el.playsInline=true;el.controls=true;el.preload='none';}else el.loading='lazy';
- const label=document.createElement('div');label.textContent=sign.word;label.style.cssText='padding:8px;text-align:center';card.append(el,label);grid.append(card);
+ const label=document.createElement('div');label.textContent=sign.word;label.style.cssText='padding:8px;text-align:center';const expand=document.createElement('button');expand.type='button';expand.textContent='Ampliar';expand.style.cssText='width:100%;padding:6px';
+ expand.onclick=()=>{if(generation!==offlineGeneration||navigator.onLine||Date.now()>=grant.until)return;
+ const modal=document.createElement('dialog');modal.style.cssText='width:min(95vw,650px);max-height:90vh;border:0;border-radius:12px;padding:16px';
+ const enlarged=document.createElement(el.tagName.toLowerCase());enlarged.src=url;enlarged.style.cssText='width:100%;max-height:65vh;object-fit:contain';
+ if(enlarged.tagName==='VIDEO'){enlarged.controls=true;enlarged.muted=true;enlarged.loop=true;enlarged.playsInline=true;}
+ const title=document.createElement('h2');title.textContent=sign.word;
+ const close=document.createElement('button');close.textContent='Fechar';close.onclick=()=>modal.close();
+ modal.append(title,enlarged);if(enlarged.tagName==='VIDEO'){const speeds=document.createElement('div');for(const rate of [.25,.5,.75,1]){const b=document.createElement('button');b.textContent=rate+'×';b.onclick=()=>enlarged.playbackRate=rate;speeds.append(b);}modal.append(speeds);}
+ modal.append(close);document.body.append(modal);const cleanup=()=>{if(enlarged.tagName==='VIDEO')enlarged.pause();modal.remove();window.removeEventListener('online',close.onclick);};modal.addEventListener('close',cleanup,{once:true});window.addEventListener('online',close.onclick,{once:true});modal.showModal();};
+ card.append(el,label,expand);grid.append(card);
  }
  if(!grid.children.length&&seq===drawGeneration)grid.textContent='Nenhum sinal público disponível no cache.';
  }
