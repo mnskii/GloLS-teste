@@ -551,7 +551,7 @@ function driveConnectionView(configured,enrollment=''){
 }
 const renderBeforePersonalDrive=render;
 render=function(){if(!me()||!D.onlineToken)return renderBeforePersonalDrive();if(driveValidatedToken===D.onlineToken)return renderBeforePersonalDrive();closeRestrictedContent();app.innerHTML='<div class="login-loading" role="status" aria-label="Carregando"></div>';checkPersonalDrive();};
-async function checkPersonalDrive(){const token=D.onlineToken;if(!token||driveCheckingToken===token)return;driveCheckingToken=token;try{const identity=await rpc('currentOnline',token);if(D.onlineToken!==token)return;if(String(me()?.email||'').trim().toLowerCase()!==identity.email)await adoptOnline(identity,token);const s=await rpc('driveConnectionStatus',token);if(D.onlineToken!==token)return;if(!s.connected||!s.configured)return driveConnectionView(s.configured);await hydratePersonalDrive();if(D.onlineToken!==token)return;driveValidatedToken=token;render();}catch(e){if(D.onlineToken===token){app.innerHTML='<p role="status">'+esc(appText(e.message))+'</p><button id="driveRetry" type="button">Tentar novamente</button><button id="driveExit" type="button">Sair da conta</button>';$('#driveRetry').onclick=checkPersonalDrive;$('#driveExit').onclick=()=>logoutAccount();}}finally{if(driveCheckingToken===token)driveCheckingToken='';}}
+async function checkPersonalDrive(){const token=D.onlineToken;if(!token||driveCheckingToken===token)return;driveCheckingToken=token;try{const identity=await rpc('currentOnline',token);if(D.onlineToken!==token)return;if(String(me()?.email||'').trim().toLowerCase()!==identity.email)await adoptOnline(identity,token);const s=await rpc('driveConnectionStatus',token);if(D.onlineToken!==token)return;if(!s.connected||!s.configured)return driveConnectionView(s.configured);await hydratePersonalDrive();if(D.onlineToken!==token)return;driveValidatedToken=token;try{await cachePut('_offline_grant_v1',await encryptCachedBlob(new Blob([JSON.stringify({token,id:me()?.id,until:Date.now()+86400000})],{type:'application/json'})));}catch(e){}render();}catch(e){if(D.onlineToken===token){app.innerHTML='<p role="status">'+esc(appText(e.message))+'</p><button id="driveRetry" type="button">Tentar novamente</button><button id="driveExit" type="button">Sair da conta</button>';$('#driveRetry').onclick=checkPersonalDrive;$('#driveExit').onclick=()=>logoutAccount();}}finally{if(driveCheckingToken===token)driveCheckingToken='';}}
 adoptOnline=async function(user,token){const email=String(user.email||'').trim().toLowerCase();if(!email||!user.id||!token)throw Error('Sessão online inválida.');const previous=me(),old=D.users.find(x=>String(x.email||'').trim().toLowerCase()===email),changed=previous?.email?.toLowerCase()!==email;driveValidatedToken='';personalHydratedToken='';personalConflict=false;personalRevision=0;personalLastSignature='';clearTimeout(personalSyncTimer);D.pendingSavedRefs=[];if(changed){teamExpanded=false;scrollPage='';scrollPositions={};for(const url of mediaURLs.values())URL.revokeObjectURL(url);mediaURLs.clear();closeRestrictedContent();}return commit(()=>{const data={...user,email,id:old?.id||user.id,serverId:user.id};if(old)Object.assign(old,data);else D.users.push({...data,photo:'',bio:user.bio||''});D.session=data.id;D.onlineToken=token;D.settings={...blank().settings,...data.preferences,fontScale:data.preferences?.fontScale||1};});};
 openEmailVerification=async function(token){serviceView('Verificar e-mail','<p>Verificando link…</p>');try{await rpc('emailVerificationInfo',token);if(!serviceDialog.open)return;serviceView('Verificar e-mail','<p>Confirme seu e-mail. Sua senha será mantida. Depois, autorize o Drive na tela oficial do Google.</p><button id="confirmEmail" type="button" class="primary">Confirmar meu e-mail</button>');$('#confirmEmail').onclick=async()=>{const b=$('#confirmEmail');b.disabled=true;try{const r=await rpc('verifyEmail',token);window.LS_EMAIL_VERIFICATION_TOKEN='';serviceView('Verificar e-mail','<p>'+esc(r.message)+'</p><p>Conectar o Drive não altera a autorização de acesso ao app.</p><button id="verificationDrive" type="button" class="primary">Conectar meu Drive</button><button id="verificationDone" type="button">Ir para entrar</button>');$('#verificationDone').onclick=()=>serviceDialog.close();$('#verificationDrive').onclick=async()=>{const button=$('#verificationDrive');button.disabled=true;try{const result=await rpc('beginDriveFromVerification',r.driveEnrollment);button.outerHTML='<a class="primary" href="'+esc(result.url)+'" target="_blank" rel="noopener">Abrir autorização oficial do Google</a>';}catch(e){setServiceStatus(e.message);button.disabled=false;}};}catch(e){setServiceStatus(e.message);b.disabled=false;}};}catch(e){setServiceStatus(e.message);}translateApp(serviceDialog);};
 
@@ -1038,4 +1038,49 @@ openSettings=function(){
 };
 </script><script>
 (()=>{const p=document.createElement('aside');p.style.cssText='position:fixed;bottom:0;left:0;z-index:9999;background:#17365d;color:white;font:12px system-ui;padding:4px 8px;border-radius:0 6px 0 0';p.textContent='GloLS TESTE · medindo…';document.body.append(p);const update=()=>{const n=performance.getEntriesByType('navigation')[0];if(n)p.textContent='TESTE · DOM '+Math.round(n.domContentLoadedEventEnd)+' ms · carga '+Math.round(n.loadEventEnd)+' ms';};window.addEventListener('load',()=>setTimeout(update,0));})();
+</script>
+<script>
+(()=>{
+let offlineGeneration=0;
+const onlineRender=render;
+async function offlineView(){
+ const generation=++offlineGeneration;
+ closeRestrictedContent();
+ app.textContent='Verificando acesso offline…';
+ try{
+ const blob=await decryptCachedMedia(await cacheGet('_offline_grant_v1'));
+ const grant=blob?JSON.parse(await blob.text()):null;
+ if(generation!==offlineGeneration||navigator.onLine)return;
+ if(!grant||grant.token!==D.onlineToken||grant.id!==me()?.id||grant.until<Date.now())throw Error('Conecte-se à internet para renovar o acesso offline.');
+ const signs=D.signs.filter(s=>isPublicSign(s)&&s.gif?.startsWith('media:'));
+ app.replaceChildren();
+ const heading=document.createElement('h2');heading.textContent='GloLS — modo offline';app.append(heading);
+ const note=document.createElement('p');note.textContent='Somente sinais públicos armazenados. Reconecte para sincronizar e acessar outras funções.';app.append(note);
+ const search=document.createElement('input');search.className='search';search.placeholder='Pesquisar sinais';app.append(search);
+ const grid=document.createElement('div');grid.className='grid';app.append(grid);
+ let drawGeneration=0,urls=[];
+ const release=()=>{urls.forEach(u=>URL.revokeObjectURL(u));urls=[];};
+ async function draw(){
+ const seq=++drawGeneration;release();grid.replaceChildren();
+ const q=search.value.toLocaleLowerCase().trim();
+ for(const sign of signs.filter(s=>[s.word,s.caption,s.tags,s.category].join(' ').toLocaleLowerCase().includes(q))){
+ if(seq!==drawGeneration||generation!==offlineGeneration||navigator.onLine)return;
+ let media;try{media=await decryptCachedMedia(await cacheGet(sign.gif));}catch(e){continue;}
+ if(!media||seq!==drawGeneration||generation!==offlineGeneration||navigator.onLine)continue;
+ const url=URL.createObjectURL(media);urls.push(url);
+ const card=document.createElement('div');card.className='card';
+ const el=document.createElement(media.type.startsWith('video/')?'video':'img');el.src=url;el.style.cssText='width:100%;aspect-ratio:4/3;object-fit:contain';
+ if(el.tagName==='VIDEO'){el.muted=true;el.loop=true;el.playsInline=true;el.controls=true;el.preload='none';}else el.loading='lazy';
+ const label=document.createElement('div');label.textContent=sign.word;label.style.cssText='padding:8px;text-align:center';card.append(el,label);grid.append(card);
+ }
+ if(!grid.children.length&&seq===drawGeneration)grid.textContent='Nenhum sinal público disponível no cache.';
+ }
+ search.addEventListener('input',draw);window.addEventListener('online',()=>{++drawGeneration;release();},{once:true});draw();
+ }catch(e){if(generation===offlineGeneration&&!navigator.onLine)app.textContent=e.message;}
+}
+render=function(){if(!navigator.onLine&&me()&&D.onlineToken&&cacheReady){offlineView();return;}return onlineRender();};
+window.addEventListener('offline',()=>{if(cacheReady&&me()&&D.onlineToken)offlineView();});
+window.addEventListener('online',()=>{++offlineGeneration;validatedAccessToken='';driveValidatedToken='';render();});
+const originalLogout=logoutAccount;logoutAccount=async function(){++offlineGeneration;try{await cachePut('_offline_grant_v1',null);}catch(e){}return originalLogout();};
+})();
 </script></body></html>
